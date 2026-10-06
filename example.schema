@@ -1,0 +1,30 @@
+schema feature Number is int;
+
+schema structure NounPhrase {
+    feature Number inherits none,
+}
+
+schema structure VerbPhrase {
+    feature Number inherits sibling(Subject)->Number,
+    // feature ImaginarySecondFeature inherits none,
+    // feature ImaginaryThirdFeature inherits none,
+}
+
+schema structure Sentence {
+    part Subject is NounPhrase,
+    part Verb is VerbPhrase,
+    part Object? is NounPhrase {
+        // feature ImaginarySecondFeature inherits none,
+        // feature ImaginaryThirdFeature inherits none,
+    },
+}
+
+show {
+    instance Sentence {
+        part Subject {
+            feature Number is 0,
+        }
+
+        // missing other parts here, imagine they exist
+    }
+}
