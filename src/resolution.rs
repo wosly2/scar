@@ -30,10 +30,13 @@ pub enum Relation<Symbol: Clone> {
 }
 
 #[derive(Clone, Debug)]
-pub enum ReferencePath<Symbol: Clone> {
-    Parent(Option<Rc<ReferencePath<Symbol>>>),
-    Sibling(PartSymbol, Option<Rc<ReferencePath<Symbol>>>),
-    Child(PartSymbol, Option<Rc<ReferencePath<Symbol>>>),
+pub struct ReferencePath<Symbol: Clone>(pub Vec<Reference<Symbol>>);
+
+#[derive(Clone, Debug)]
+pub enum Reference<Symbol: Clone> {
+    Parent,
+    Sibling(PartSymbol),
+    Child(PartSymbol),
 
     /// This is only used by Parts to pull
     /// data from their embedded Structure.
@@ -41,7 +44,7 @@ pub enum ReferencePath<Symbol: Clone> {
     /// Using this inside a Structure prohibited;
     /// any resolution of such use will return a
     /// `ResolutionError`.
-    SubStructure(Symbol, Option<Rc<ReferencePath<Symbol>>>),
+    SubStructure(Symbol),
     Finally(Symbol),
 }
 
@@ -69,139 +72,7 @@ impl<T> StopOrContinue<T> {
     }
 }
 
-impl<Symbol: Clone> ReferencePath<Symbol> {
-    pub fn inner_rc<'a>(&'a self) -> Option<&'a Rc<ReferencePath<Symbol>>> {
-        match self {
-            ReferencePath::Parent(reference)
-            | ReferencePath::Sibling(_, reference)
-            | ReferencePath::Child(_, reference)
-            | ReferencePath::SubStructure(_, reference) => match reference {
-                Some(rc_ref) => Some(rc_ref),
-                None => todo!(),
-            },
-            ReferencePath::Finally(_) => return None,
-        }
-    }
-
-    pub fn inner_ref<'a>(&'a self) -> Option<&'a ReferencePath<Symbol>> {
-        match self.inner_rc() {
-            Some(rc_ref) => Some(rc_ref.as_ref()),
-            None => None,
-        }
-    }
-
-    pub fn accumulate_until<'a, Acc: Clone, F>(&'a self, acc: Acc, mut f: F) -> Acc
-    where
-        F: FnMut(&Acc, &'a ReferencePath<Symbol>) -> StopOrContinue<Acc>,
-    {
-        match self {
-            ReferencePath::Parent(reference)
-            | ReferencePath::Sibling(_, reference)
-            | ReferencePath::Child(_, reference)
-            | ReferencePath::SubStructure(_, reference) => match f(&acc, self) {
-                StopOrContinue::Stop(n_acc) => n_acc,
-                StopOrContinue::Continue(n_acc) => match reference {
-                    Some(reference) => reference.accumulate_until(n_acc, f),
-                    None => n_acc,
-                },
-            },
-
-            ReferencePath::Finally(_) => f(&acc, self).value().clone(),
-        }
-    }
-
-    pub fn accumulate<Acc: Copy, F>(&self, acc: Acc, mut f: F) -> Acc
-    where
-        F: FnMut(Acc, &ReferencePath<Symbol>) -> Acc,
-    {
-        self.accumulate_until(acc, |a, r| StopOrContinue::Continue(f(*a, r)))
-    }
-
-    /// this is 0-indexed
-    pub fn nth<'a>(&'a self, n: usize) -> Option<&'a Self> {
-        self.accumulate_until((0, None), |acc, refr| {
-            if acc.0 == n {
-                StopOrContinue::Stop((acc.0, Some(refr)))
-            } else {
-                StopOrContinue::Continue((acc.0 + 1, None))
-            }
-        })
-        .1
-    }
-
-    /// all `Option<Reference>` are gauranteed to be `None`
-    pub fn last<'a>(&'a self) -> &'a Self {
-        self.accumulate_until(self, |_, refr| StopOrContinue::Continue(refr))
-    }
-
-    pub fn recursive_clone<'a>(&'a self) -> &'a Self {
-        match self {
-            ReferencePath::Parent(reference_path) => ReferencePath::Parent(match reference_path {
-                Some(rp) => ReferencePath::Parent(Some(Rc::new(rp.deref()))),
-                None => self,
-            }),
-            ReferencePath::Sibling(part_symbol, reference_path) => todo!(),
-            ReferencePath::Child(part_symbol, reference_path) => todo!(),
-            ReferencePath::SubStructure(_, reference_path) => todo!(),
-            ReferencePath::Finally(_) => self,
-        }
-    }
-
-    pub fn append<'b>(
-        &'b self,
-        sub_reference: &'b ReferencePath<Symbol>,
-    ) -> Option<&'b ReferencePath<Symbol>> {
-        let last = self.last();
-
-        let new = self.clone();
-        new.into_iter().last().map(|last| last = sub_reference);
-
-        // let new_last = match last {
-        //     ReferencePath::Parent(_) => Some(ReferencePath::Parent(Some(Rc::new(sub_reference)))),
-        //     ReferencePath::Sibling(symbol, _) => Some(ReferencePath::Sibling(
-        //         symbol.clone(),
-        //         Some(Rc::new(sub_reference)),
-        //     )),
-        //     ReferencePath::Child(symbol, _) => Some(ReferencePath::Child(
-        //         symbol.clone(),
-        //         Some(Rc::new(sub_reference)),
-        //     )),
-        //     ReferencePath::SubStructure(symbol, _) => Some(ReferencePath::SubStructure(
-        //         symbol.clone(),
-        //         Some(Rc::new(sub_reference)),
-        //     )),
-        //     ReferencePath::Finally(_) => None,
-        // };
-    }
-}
-
-pub struct ReferencePathIterator<'a, Symbol: Clone> {
-    reference_stub: Option<&'a ReferencePath<Symbol>>,
-}
-
-impl<'a, Symbol: Clone> Iterator for ReferencePathIterator<'a, Symbol> {
-    type Item = &'a ReferencePath<Symbol>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let inner = match self.reference_stub {
-            Some(rc_ref) => rc_ref.inner_ref(),
-            None => return None,
-        };
-        self.reference_stub = inner;
-        inner
-    }
-}
-
-impl<'a, Symbol: Clone> IntoIterator for &'a ReferencePath<Symbol> {
-    type Item = &'a ReferencePath<Symbol>;
-    type IntoIter = ReferencePathIterator<'a, Symbol>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        ReferencePathIterator {
-            reference_stub: Some(self),
-        }
-    }
-}
+impl<Symbol: Clone> ReferencePath<Symbol> {}
 
 impl<'a, Root: DataSource, Symbol: Clone> Sourced<'a, Root, Symbol> {}
 
@@ -228,13 +99,7 @@ impl<Source: DataSource> ReferenceOrigin<PartSymbol> for Defined<Source, Structu
         &self,
         reference_path: ReferencePath<PartSymbol>,
     ) -> Self::Output {
-        reference_path.accumulate(None, |acc, ref_path| match ref_path {
-            ReferencePath::Parent(reference_path) => todo!(),
-            ReferencePath::Sibling(part_symbol, reference_path) => todo!(),
-            ReferencePath::Child(part_symbol, reference_path) => todo!(),
-            ReferencePath::SubStructure(_, reference_path) => todo!(),
-            ReferencePath::Finally(_) => todo!(),
-        });
+        todo!()
     }
 }
 

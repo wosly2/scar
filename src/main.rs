@@ -28,10 +28,10 @@ fn main() {
     let verb_phrase = table.define(StructureSchema {
         features: HashMap::from([(
             number.try_into().unwrap(),
-            Relation::MustInherit(Reference::Sibling(
-                sentence_subject.try_into().unwrap(),
-                Some(Rc::new(Reference::Finally(number.try_into().unwrap()))),
-            )),
+            Relation::MustInherit(ReferencePath(vec![
+                Reference::Sibling(sentence_subject.try_into().unwrap()),
+                Reference::Finally(number.try_into().unwrap()),
+            ])),
         )]),
         parts: HashSet::new(),
     });
