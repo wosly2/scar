@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::{any::TypeId, collections::HashMap, rc::Rc};
 
 mod structure;
@@ -9,68 +10,65 @@ pub use crate::resolution::*;
 fn main() {
     let mut table = DataTable::new();
 
-    let number = table.define_feature(FeatureSchema {
+    let number = table.define(FeatureSchema {
         value_type: FeatureValueSchema::Type(TypeId::of::<usize>()),
     });
 
-    let noun_phrase = table.define_structure(StructureSchema {
-        features: HashMap::from([(number, Relation::MustSelfDefine)]),
-        parts: HashMap::new(),
+    let noun_phrase = table.define(StructureSchema {
+        features: HashMap::from([(number.try_into().unwrap(), Relation::MustSelfDefine)]),
+        parts: HashSet::new(),
     });
 
-    let verb_phrase = table.define_structure(StructureSchema {
+    let sentence_subject = table.define(PartSchema {
+        features: HashMap::new(),
+        structure: noun_phrase.try_into().unwrap(),
+        presence: Presence::Required,
+    });
+
+    let verb_phrase = table.define(StructureSchema {
         features: HashMap::from([(
-            number,
+            number.try_into().unwrap(),
             Relation::MustInherit(Reference::Sibling(
-                PartSymbol::new("subject"),
-                Some(Rc::new(Reference::Finally(number))),
+                sentence_subject.try_into().unwrap(),
+                Some(Rc::new(Reference::Finally(number.try_into().unwrap()))),
             )),
         )]),
-        parts: HashMap::new(),
+        parts: HashSet::new(),
     });
 
-    let sentence = table.define_structure(StructureSchema {
+    let sentence_verb = table.define(PartSchema {
         features: HashMap::new(),
-        parts: HashMap::from([
-            (
-                PartSymbol::new("subject"),
-                PartSchema {
-                    features: HashMap::new(),
-                    structure: noun_phrase,
-                    presence: Presence::Required,
-                },
-            ),
-            (
-                PartSymbol::new("verb"),
-                PartSchema {
-                    features: HashMap::new(),
-                    structure: verb_phrase,
-                    presence: Presence::Required,
-                },
-            ),
-            (
-                PartSymbol::new("object"),
-                PartSchema {
-                    features: HashMap::new(),
-                    structure: noun_phrase,
-                    presence: Presence::Optional,
-                },
-            ),
+        structure: verb_phrase.try_into().unwrap(),
+        presence: Presence::Required,
+    });
+
+    let sentence_object = table.define(PartSchema {
+        features: HashMap::new(),
+        structure: noun_phrase.try_into().unwrap(),
+        presence: Presence::Optional,
+    });
+
+    let sentence = table.define(StructureSchema {
+        features: HashMap::new(),
+        parts: HashSet::from([
+            sentence_subject.try_into().unwrap(),
+            sentence_verb.try_into().unwrap(),
+            sentence_object.try_into().unwrap(),
         ]),
     });
 
     let mut example_sentence = StructureInstance {
-        schema: sentence,
+        schema: sentence.try_into().unwrap(),
         features: HashMap::new(),
         parts: HashMap::from([
             (
-                PartSymbol::new("subject"),
+                sentence_subject.try_into().unwrap(),
                 PartInstance {
                     features: HashMap::new(),
                     structure: StructureInstance {
-                        schema: noun_phrase,
+                        schema: noun_phrase.try_into().unwrap(),
                         features: HashMap::from([FeatureInstance {
-                            schema: number,
+                            schema: number.try_into().unwrap(),
                             value: FeatureValueInstance::Type(Rc::new(0 as usize)),
                         }
                         .key_pair()]),

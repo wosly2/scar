@@ -1,8 +1,12 @@
-use std::rc::Rc;
+use std::{
+    ops::Deref,
+    process::Output,
+    rc::{self, Rc},
+};
 
 use crate::{
-    DataTable, FeatureInstance, FeatureSymbol, PartInstance, PartSchema, PartSymbol,
-    StructureInstance, StructureSchema,
+    DataTable, FeatureInstance, FeatureSchema, FeatureSymbol, PartInstance, PartSchema, PartSymbol,
+    Schema, StructureInstance, StructureSchema, StructureSymbol, structure,
 };
 
 /*
@@ -11,25 +15,25 @@ use crate::{
  * ============
  */
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Presence {
     Required,
     Optional,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Relation<Symbol: Clone> {
     MustSelfDefine,
-    PrefersSelfDefined(Reference<Symbol>),
-    MustInherit(Reference<Symbol>),
-    PrefersInherited(Reference<Symbol>),
+    PrefersSelfDefined(ReferencePath<Symbol>),
+    MustInherit(ReferencePath<Symbol>),
+    PrefersInherited(ReferencePath<Symbol>),
 }
 
-#[derive(Clone)]
-pub enum Reference<Symbol: Clone> {
-    Parent(Option<Rc<Reference<Symbol>>>),
-    Sibling(PartSymbol, Option<Rc<Reference<Symbol>>>),
-    Child(PartSymbol, Option<Rc<Reference<Symbol>>>),
+#[derive(Clone, Debug)]
+pub enum ReferencePath<Symbol: Clone> {
+    Parent(Option<Rc<ReferencePath<Symbol>>>),
+    Sibling(PartSymbol, Option<Rc<ReferencePath<Symbol>>>),
+    Child(PartSymbol, Option<Rc<ReferencePath<Symbol>>>),
 
     /// This is only used by Parts to pull
     /// data from their embedded Structure.
@@ -37,7 +41,7 @@ pub enum Reference<Symbol: Clone> {
     /// Using this inside a Structure prohibited;
     /// any resolution of such use will return a
     /// `ResolutionError`.
-    SubStructure(Symbol, Option<Rc<Reference<Symbol>>>),
+    SubStructure(Symbol, Option<Rc<ReferencePath<Symbol>>>),
     Finally(Symbol),
 }
 
@@ -47,9 +51,9 @@ pub enum Reference<Symbol: Clone> {
  * ==========
  */
 
-pub struct Sourced<'a, Root: Structure, Symbol: Clone> {
+pub struct Sourced<'a, Root: DataSource, Symbol: Clone> {
     pub root: &'a Root,
-    pub path: Reference<Symbol>,
+    pub path: ReferencePath<Symbol>,
 }
 
 pub enum StopOrContinue<T> {
@@ -65,16 +69,36 @@ impl<T> StopOrContinue<T> {
     }
 }
 
-impl<Symbol: Clone> Reference<Symbol> {
+impl<Symbol: Clone> ReferencePath<Symbol> {
+    pub fn inner_rc<'a>(&'a self) -> Option<&'a Rc<ReferencePath<Symbol>>> {
+        match self {
+            ReferencePath::Parent(reference)
+            | ReferencePath::Sibling(_, reference)
+            | ReferencePath::Child(_, reference)
+            | ReferencePath::SubStructure(_, reference) => match reference {
+                Some(rc_ref) => Some(rc_ref),
+                None => todo!(),
+            },
+            ReferencePath::Finally(_) => return None,
+        }
+    }
+
+    pub fn inner_ref<'a>(&'a self) -> Option<&'a ReferencePath<Symbol>> {
+        match self.inner_rc() {
+            Some(rc_ref) => Some(rc_ref.as_ref()),
+            None => None,
+        }
+    }
+
     pub fn accumulate_until<'a, Acc: Clone, F>(&'a self, acc: Acc, mut f: F) -> Acc
     where
-        F: FnMut(&Acc, &'a Reference<Symbol>) -> StopOrContinue<Acc>,
+        F: FnMut(&Acc, &'a ReferencePath<Symbol>) -> StopOrContinue<Acc>,
     {
         match self {
-            Reference::Parent(reference)
-            | Reference::Sibling(_, reference)
-            | Reference::Child(_, reference)
-            | Reference::SubStructure(_, reference) => match f(&acc, self) {
+            ReferencePath::Parent(reference)
+            | ReferencePath::Sibling(_, reference)
+            | ReferencePath::Child(_, reference)
+            | ReferencePath::SubStructure(_, reference) => match f(&acc, self) {
                 StopOrContinue::Stop(n_acc) => n_acc,
                 StopOrContinue::Continue(n_acc) => match reference {
                     Some(reference) => reference.accumulate_until(n_acc, f),
@@ -82,17 +106,18 @@ impl<Symbol: Clone> Reference<Symbol> {
                 },
             },
 
-            Reference::Finally(_) => f(&acc, self).value().clone(),
+            ReferencePath::Finally(_) => f(&acc, self).value().clone(),
         }
     }
 
     pub fn accumulate<Acc: Copy, F>(&self, acc: Acc, mut f: F) -> Acc
     where
-        F: FnMut(Acc, &Reference<Symbol>) -> Acc,
+        F: FnMut(Acc, &ReferencePath<Symbol>) -> Acc,
     {
         self.accumulate_until(acc, |a, r| StopOrContinue::Continue(f(*a, r)))
     }
 
+    /// this is 0-indexed
     pub fn nth<'a>(&'a self, n: usize) -> Option<&'a Self> {
         self.accumulate_until((0, None), |acc, refr| {
             if acc.0 == n {
@@ -109,90 +134,203 @@ impl<Symbol: Clone> Reference<Symbol> {
         self.accumulate_until(self, |_, refr| StopOrContinue::Continue(refr))
     }
 
-    pub fn append<'b>(&'b self, sub_reference: Reference<Symbol>) -> Option<Reference<Symbol>> {
+    pub fn recursive_clone<'a>(&'a self) -> &'a Self {
+        match self {
+            ReferencePath::Parent(reference_path) => ReferencePath::Parent(match reference_path {
+                Some(rp) => ReferencePath::Parent(Some(Rc::new(rp.deref()))),
+                None => self,
+            }),
+            ReferencePath::Sibling(part_symbol, reference_path) => todo!(),
+            ReferencePath::Child(part_symbol, reference_path) => todo!(),
+            ReferencePath::SubStructure(_, reference_path) => todo!(),
+            ReferencePath::Finally(_) => self,
+        }
+    }
+
+    pub fn append<'b>(
+        &'b self,
+        sub_reference: &'b ReferencePath<Symbol>,
+    ) -> Option<&'b ReferencePath<Symbol>> {
         let last = self.last();
 
-        match last {
-            Reference::Parent(_) => Some(Reference::Parent(Some(Rc::new(sub_reference)))),
-            Reference::Sibling(symbol, _) => Some(Reference::Sibling(
-                symbol.clone(),
-                Some(Rc::new(sub_reference)),
-            )),
-            Reference::Child(symbol, _) => Some(Reference::Child(
-                symbol.clone(),
-                Some(Rc::new(sub_reference)),
-            )),
-            Reference::SubStructure(symbol, _) => Some(Reference::SubStructure(
-                symbol.clone(),
-                Some(Rc::new(sub_reference)),
-            )),
-            Reference::Finally(_) => None,
+        let new = self.clone();
+        new.into_iter().last().map(|last| last = sub_reference);
+
+        // let new_last = match last {
+        //     ReferencePath::Parent(_) => Some(ReferencePath::Parent(Some(Rc::new(sub_reference)))),
+        //     ReferencePath::Sibling(symbol, _) => Some(ReferencePath::Sibling(
+        //         symbol.clone(),
+        //         Some(Rc::new(sub_reference)),
+        //     )),
+        //     ReferencePath::Child(symbol, _) => Some(ReferencePath::Child(
+        //         symbol.clone(),
+        //         Some(Rc::new(sub_reference)),
+        //     )),
+        //     ReferencePath::SubStructure(symbol, _) => Some(ReferencePath::SubStructure(
+        //         symbol.clone(),
+        //         Some(Rc::new(sub_reference)),
+        //     )),
+        //     ReferencePath::Finally(_) => None,
+        // };
+    }
+}
+
+pub struct ReferencePathIterator<'a, Symbol: Clone> {
+    reference_stub: Option<&'a ReferencePath<Symbol>>,
+}
+
+impl<'a, Symbol: Clone> Iterator for ReferencePathIterator<'a, Symbol> {
+    type Item = &'a ReferencePath<Symbol>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let inner = match self.reference_stub {
+            Some(rc_ref) => rc_ref.inner_ref(),
+            None => return None,
+        };
+        self.reference_stub = inner;
+        inner
+    }
+}
+
+impl<'a, Symbol: Clone> IntoIterator for &'a ReferencePath<Symbol> {
+    type Item = &'a ReferencePath<Symbol>;
+    type IntoIter = ReferencePathIterator<'a, Symbol>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        ReferencePathIterator {
+            reference_stub: Some(self),
         }
     }
 }
 
-impl<'a, Root: Structure, Symbol: Clone> Sourced<'a, Root, Symbol> {}
+impl<'a, Root: DataSource, Symbol: Clone> Sourced<'a, Root, Symbol> {}
 
-pub struct Defined<Instance> {
-    pub data_table: DataTable,
-    pub instance: Instance,
+pub struct Defined<Source: DataSource, Object> {
+    pub data_source: Source,
+    pub instance: Object,
 }
 
-pub trait Structure {
+pub struct Referenced<Origin: ReferenceOrigin<Symbol>, Symbol: Clone> {
+    pub reference_point: Origin,
+    pub instance: Symbol,
+}
+
+pub trait ReferenceOrigin<Symbol: Clone> {
+    type Output;
+
+    fn resolve_absolute_reference(&self, reference_path: ReferencePath<Symbol>) -> Self::Output;
+}
+
+impl<Source: DataSource> ReferenceOrigin<PartSymbol> for Defined<Source, StructureSchema> {
+    type Output = PartSchema;
+
+    fn resolve_absolute_reference(
+        &self,
+        reference_path: ReferencePath<PartSymbol>,
+    ) -> Self::Output {
+        reference_path.accumulate(None, |acc, ref_path| match ref_path {
+            ReferencePath::Parent(reference_path) => todo!(),
+            ReferencePath::Sibling(part_symbol, reference_path) => todo!(),
+            ReferencePath::Child(part_symbol, reference_path) => todo!(),
+            ReferencePath::SubStructure(_, reference_path) => todo!(),
+            ReferencePath::Finally(_) => todo!(),
+        });
+    }
+}
+
+pub trait DataSource {
     type Feature;
     type Part;
+    type Structure;
 
     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature>;
     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part>;
+    fn get_structure(&self, structure: &StructureSymbol) -> Option<&Self::Structure>;
 }
 
-impl Structure for StructureSchema {
-    type Feature = Relation<FeatureSymbol>;
+// impl<T: DataSource, Instance> DataSource for Defined<T, Instance> {
+//     type Feature = T::Feature;
+//     type Part = T::Part;
+//
+//     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
+//         todo!()
+//     }
+//
+//     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
+//         todo!()
+//     }
+// }
+
+impl DataSource for DataTable {
+    type Feature = FeatureSchema;
     type Part = PartSchema;
+    type Structure = StructureSchema;
 
     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
-        self.features.get(&feature)
-    }
-
-    fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
-        self.parts.get(part)
-    }
-}
-
-impl Structure for Defined<StructureInstance> {
-    type Feature = FeatureInstance;
-    type Part = PartInstance;
-
-    fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
-        match self
-            .data_table
-            .get_structure(&self.instance.schema)?
-            .get_feature(feature)?
-        {
-            Relation::MustSelfDefine => self.get_feature(feature),
-            Relation::PrefersSelfDefined(reference) => {
-                if let Some(f) = self.get_feature(feature) {
-                    Some(f)
-                } else {
-                    // uhhhhhhhhhh uhhhhhh
-                    None
-                }
-            }
-            Relation::MustInherit(reference) => {
-                // uhhhhhhhhhh uhhhhhh
-                None
-            }
-            Relation::PrefersInherited(reference) => {
-                // uhhhhhhhhhh uhhhhhh
-                None
-            }
+        match self.get_schema(*feature).map(|schema| match schema {
+            Schema::Feature(schema) => Some(schema),
+            _ => None,
+        }) {
+            Some(opt) => opt,
+            None => None,
         }
     }
 
     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
-        todo!()
+        match self.get_schema(*part).map(|schema| match schema {
+            Schema::Part(schema) => Some(schema),
+            _ => None,
+        }) {
+            Some(opt) => opt,
+            None => None,
+        }
+    }
+
+    fn get_structure(&self, structure: &StructureSymbol) -> Option<&Self::Structure> {
+        match self.get_schema(*structure).map(|schema| match schema {
+            Schema::Structure(schema) => Some(schema),
+            _ => None,
+        }) {
+            Some(opt) => opt,
+            None => None,
+        }
     }
 }
+
+// impl DataSource for Defined<DataTable, StructureInstance> {
+//     type Feature = FeatureInstance;
+//     type Part = PartInstance;
+//
+//     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
+//         match self
+//             .data_source
+//             .get_structure(&self.instance.schema)?
+//             .get_feature(feature)?
+//         {
+//             Relation::MustSelfDefine => self.get_feature(feature),
+//             Relation::PrefersSelfDefined(reference) => {
+//                 if let Some(f) = self.get_feature(feature) {
+//                     Some(f)
+//                 } else {
+//                     // uhhhhhhhhhh uhhhhhh
+//                     None
+//                 }
+//             }
+//             Relation::MustInherit(reference) => {
+//                 // uhhhhhhhhhh uhhhhhh
+//                 None
+//             }
+//             Relation::PrefersInherited(reference) => {
+//                 // uhhhhhhhhhh uhhhhhh
+//                 None
+//             }
+//         }
+//     }
+//
+//     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
+//         todo!()
+//     }
+// }
 
 pub struct ValidatedInstance<'a>(&'a StructureInstance);
 
