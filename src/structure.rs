@@ -1,8 +1,12 @@
 use std::{
     any::{Any, TypeId},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    process::Output,
     rc::Rc,
 };
+
+use derive_more::{From, TryInto};
 
 use crate::{Presence, Relation};
 
@@ -13,42 +17,83 @@ use crate::{Presence, Relation};
  */
 
 pub struct DataTable {
-    structures: HashMap<StructureSymbol, StructureSchema>,
-    next_structure_id: StructureSymbol,
-    features: HashMap<FeatureSymbol, FeatureSchema>,
-    next_feature_id: FeatureSymbol,
+    schemas: HashMap<Symbol, Schema>,
+    next_id: usize,
+}
+
+pub enum ObjectType {
+    Part,
+    Structure,
+    Feature,
+}
+
+pub trait ObjectTyped {
+    fn object_type(&self) -> ObjectType;
+}
+
+impl ObjectTyped for Schema {
+    fn object_type(&self) -> ObjectType {
+        match self {
+            Schema::Part(_) => ObjectType::Part,
+            Schema::Structure(_) => ObjectType::Structure,
+            Schema::Feature(_) => ObjectType::Feature,
+        }
+    }
+}
+
+impl ObjectTyped for Symbol {
+    fn object_type(&self) -> ObjectType {
+        match self {
+            Symbol::Part(_) => ObjectType::Part,
+            Symbol::Structure(_) => ObjectType::Structure,
+            Symbol::Feature(_) => ObjectType::Feature,
+        }
+    }
+}
+
+#[derive(TryInto, From, Debug, Clone)]
+pub enum Schema {
+    Part(PartSchema),
+    Structure(StructureSchema),
+    Feature(FeatureSchema),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, TryInto, From, Debug)]
+pub enum Symbol {
+    Part(PartSymbol),
+    Structure(StructureSymbol),
+    Feature(FeatureSymbol),
 }
 
 impl DataTable {
     pub fn new() -> Self {
         Self {
-            structures: HashMap::new(),
-            next_structure_id: StructureSymbol(1),
-            features: HashMap::new(),
-            next_feature_id: FeatureSymbol(1),
+            schemas: HashMap::new(),
+            next_id: 1,
         }
     }
 
-    pub fn define_structure(&mut self, schema: StructureSchema) -> StructureSymbol {
-        let id = self.next_structure_id;
-        self.structures.insert(id, schema);
-        self.next_structure_id = StructureSymbol(self.next_structure_id.0 + 1);
-        id
+    pub fn new_symbol(&mut self, object: ObjectType) -> Symbol {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        match object {
+            ObjectType::Part => Symbol::Part(PartSymbol(id)),
+            ObjectType::Structure => Symbol::Structure(StructureSymbol(id)),
+            ObjectType::Feature => Symbol::Feature(FeatureSymbol(id)),
+        }
     }
 
-    pub fn define_feature(&mut self, schema: FeatureSchema) -> FeatureSymbol {
-        let id = self.next_feature_id;
-        self.features.insert(id, schema);
-        self.next_feature_id = FeatureSymbol(self.next_feature_id.0 + 1);
-        id
+    pub fn define(&mut self, schema: impl Into<Schema>) -> Symbol {
+        let schema = schema.into();
+
+        let symbol = self.new_symbol(schema.object_type());
+        self.schemas.insert(symbol, schema);
+        symbol
     }
 
-    pub fn get_structure(&self, id: &StructureSymbol) -> Option<&StructureSchema> {
-        self.structures.get(&id)
-    }
-
-    pub fn get_feature(&self, id: &FeatureSymbol) -> Option<&FeatureSchema> {
-        self.features.get(&id)
+    pub fn get_schema(&self, id: impl Into<Symbol>) -> Option<&Schema> {
+        self.schemas.get(&id.into())
     }
 }
 
@@ -58,33 +103,17 @@ impl DataTable {
  * =======
  */
 
-#[derive(PartialEq, Eq, Hash, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 pub struct StructureSymbol(pub usize);
 
-#[derive(PartialEq, Eq, Hash, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 pub struct FeatureSymbol(pub usize);
 
-#[derive(PartialEq, Eq, Hash, Clone)]
-pub struct FeatureEnumSymbol(pub String);
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct FeatureEnumSymbol(pub usize);
 
-#[derive(PartialEq, Eq, Hash, Clone)]
-pub struct PartSymbol(pub String);
-
-pub trait NewStringSymbol {
-    fn new(s: impl Into<String>) -> Self;
-}
-
-impl NewStringSymbol for PartSymbol {
-    fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-}
-
-impl NewStringSymbol for FeatureEnumSymbol {
-    fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-}
+#[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+pub struct PartSymbol(pub usize);
 
 /*
  * ======
@@ -92,23 +121,30 @@ impl NewStringSymbol for FeatureEnumSymbol {
  * ======
  */
 
-#[derive(Clone)]
-pub struct StructureSchema {
-    pub features: HashMap<FeatureSymbol, Relation<FeatureSymbol>>,
-    pub parts: HashMap<PartSymbol, PartSchema>,
+pub trait GetSymbol<Symbol: Copy + Clone + PartialEq + Eq + Hash> {
+    type Output;
+    fn get_symbol(&self, symbol: Symbol) -> Output;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+pub struct StructureSchema {
+    pub features: HashMap<FeatureSymbol, Relation>,
+    pub parts: HashSet<PartSymbol>,
+}
+
+#[derive(Clone, Debug)]
 pub struct PartSchema {
-    pub features: HashMap<FeatureSymbol, Relation<FeatureSymbol>>,
+    pub features: HashMap<FeatureSymbol, Relation>,
     pub structure: StructureSymbol,
     pub presence: Presence,
 }
 
+#[derive(Debug, Clone)]
 pub struct FeatureSchema {
     pub value_type: FeatureValueSchema,
 }
 
+#[derive(Debug, Clone)]
 pub enum FeatureValueSchema {
     Type(TypeId),
     Enum(HashMap<FeatureEnumSymbol, Option<TypeId>>),
@@ -124,6 +160,22 @@ pub struct StructureInstance {
     pub features: HashMap<FeatureSymbol, FeatureInstance>,
     pub parts: HashMap<PartSymbol, PartInstance>,
 }
+
+// impl GetSymbol<FeatureSymbol> for StructureInstance {
+//     type Output = FeatureInstance;
+//
+//     fn get_symbol(&self, symbol: FeatureSymbol) -> Output {
+//         todo!()
+//     }
+// }
+//
+// impl GetSymbol<PartSymbol> for StructureInstance {
+//     type Output = PartInstance;
+//
+//     fn get_symbol(&self, symbol: PartSymbol) -> Output {
+//         todo!()
+//     }
+// }
 
 pub struct PartInstance {
     pub features: HashMap<FeatureSymbol, FeatureInstance>,
