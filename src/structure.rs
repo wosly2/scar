@@ -1,6 +1,8 @@
 use std::{
     any::{Any, TypeId},
     collections::{HashMap, HashSet},
+    hash::Hash,
+    process::Output,
     rc::Rc,
 };
 
@@ -119,6 +121,11 @@ pub struct PartSymbol(pub usize);
  * ======
  */
 
+pub trait GetSymbol<Symbol: Copy + Clone + PartialEq + Eq + Hash> {
+    type Output;
+    fn get_symbol(&self, symbol: Symbol) -> Output;
+}
+
 #[derive(Clone, Debug)]
 pub struct StructureSchema {
     pub features: HashMap<FeatureSymbol, Relation>,
@@ -153,6 +160,22 @@ pub struct StructureInstance {
     pub features: HashMap<FeatureSymbol, FeatureInstance>,
     pub parts: HashMap<PartSymbol, PartInstance>,
 }
+
+// impl GetSymbol<FeatureSymbol> for StructureInstance {
+//     type Output = FeatureInstance;
+//
+//     fn get_symbol(&self, symbol: FeatureSymbol) -> Output {
+//         todo!()
+//     }
+// }
+//
+// impl GetSymbol<PartSymbol> for StructureInstance {
+//     type Output = PartInstance;
+//
+//     fn get_symbol(&self, symbol: PartSymbol) -> Output {
+//         todo!()
+//     }
+// }
 
 pub struct PartInstance {
     pub features: HashMap<FeatureSymbol, FeatureInstance>,

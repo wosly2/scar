@@ -1,10 +1,19 @@
 use std::collections::HashSet;
 use std::{any::TypeId, collections::HashMap, rc::Rc};
 
-mod structure;
-pub use crate::structure::*;
+mod data_source;
+mod reference;
+mod reference_path;
 mod resolution;
-pub use crate::resolution::*;
+mod structure;
+mod validation;
+
+pub use data_source::*;
+pub use reference::*;
+pub use reference_path::*;
+pub use resolution::*;
+pub use structure::*;
+pub use validation::*;
 
 #[allow(unused)]
 fn main() {
