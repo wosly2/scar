@@ -1,4 +1,5 @@
 use std::{
+    io::Error,
     ops::Deref,
     process::Output,
     rc::{self, Rc},
@@ -6,7 +7,7 @@ use std::{
 
 use crate::{
     DataTable, FeatureInstance, FeatureSchema, FeatureSymbol, PartInstance, PartSchema, PartSymbol,
-    Schema, StructureInstance, StructureSchema, StructureSymbol, structure,
+    Schema, StructureInstance, StructureSchema, StructureSymbol, Symbol, structure,
 };
 
 /*
@@ -22,18 +23,15 @@ pub enum Presence {
 }
 
 #[derive(Clone, Debug)]
-pub enum Relation<Symbol: Clone> {
+pub enum Relation {
     MustSelfDefine,
-    PrefersSelfDefined(ReferencePath<Symbol>),
-    MustInherit(ReferencePath<Symbol>),
-    PrefersInherited(ReferencePath<Symbol>),
+    PrefersSelfDefined(ComplexReferencePath),
+    MustInherit(ComplexReferencePath),
+    PrefersInherited(ComplexReferencePath),
 }
 
-#[derive(Clone, Debug)]
-pub struct ReferencePath<Symbol: Clone>(pub Vec<Reference<Symbol>>);
-
-#[derive(Clone, Debug)]
-pub enum Reference<Symbol: Clone> {
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ComplexReference {
     Parent,
     Sibling(PartSymbol),
     Child(PartSymbol),
@@ -44,8 +42,227 @@ pub enum Reference<Symbol: Clone> {
     /// Using this inside a Structure prohibited;
     /// any resolution of such use will return a
     /// `ResolutionError`.
-    SubStructure(Symbol),
-    Finally(Symbol),
+    Substructure(FeatureSymbol),
+    Here(FeatureSymbol),
+}
+
+#[derive(Clone, Debug)]
+pub struct ComplexReferencePath {
+    steps: Vec<ComplexReference>,
+}
+
+impl ComplexReferencePath {
+    pub fn normalize(&self) -> NormalReferencePath {
+        todo!()
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum NormalReference {
+    Child(PartSymbol),
+    /// Behaves as a mirror of `Reference::Substructure`
+    Substructure(FeatureSymbol),
+    Here(FeatureSymbol),
+}
+
+#[derive(Clone, Debug)]
+pub struct NormalReferencePath {
+    steps: Vec<NormalReference>,
+}
+
+pub trait Reference: PartialEq + Eq + Copy + Clone {
+    fn new_here(symbol: FeatureSymbol) -> Self;
+    fn get_here(&self) -> Option<FeatureSymbol>;
+    fn is_here(&self) -> bool;
+}
+
+impl Reference for ComplexReference {
+    fn new_here(symbol: FeatureSymbol) -> Self {
+        ComplexReference::Here(symbol)
+    }
+
+    fn get_here(&self) -> Option<FeatureSymbol> {
+        match self {
+            ComplexReference::Parent
+            | ComplexReference::Sibling(_)
+            | ComplexReference::Child(_)
+            | ComplexReference::Substructure(_) => None,
+            ComplexReference::Here(feature_symbol) => Some(*feature_symbol),
+        }
+    }
+
+    fn is_here(&self) -> bool {
+        match self {
+            ComplexReference::Parent
+            | ComplexReference::Sibling(_)
+            | ComplexReference::Child(_)
+            | ComplexReference::Substructure(_) => false,
+            ComplexReference::Here(_) => true,
+        }
+    }
+}
+
+impl Reference for NormalReference {
+    fn new_here(symbol: FeatureSymbol) -> Self {
+        NormalReference::Here(symbol)
+    }
+
+    fn get_here(&self) -> Option<FeatureSymbol> {
+        match self {
+            NormalReference::Child(_) | NormalReference::Substructure(_) => None,
+            NormalReference::Here(feature_symbol) => Some(*feature_symbol),
+        }
+    }
+
+    fn is_here(&self) -> bool {
+        match self {
+            NormalReference::Child(_) | NormalReference::Substructure(_) => false,
+            NormalReference::Here(_) => true,
+        }
+    }
+}
+
+pub trait ReferencePath: Sized {
+    type Reference: Reference;
+
+    fn new(steps: impl Into<Vec<Self::Reference>>) -> Self;
+    fn steps(&self) -> &Vec<Self::Reference>;
+    fn steps_mut(&mut self) -> &mut Vec<Self::Reference>;
+
+    /// This function relies on `Self::push()` and therefore will also
+    /// return an `Err(())` if one attempts append while the last value is already
+    /// `Here(Symbol)`.
+    fn append(&mut self, mut path: Self) -> Result<(), ()> {
+        if self.is_final() {
+            self.steps_mut().append(path.steps_mut());
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn is_final(&self) -> bool {
+        match self.steps().last() {
+            None => false,
+            Some(reference) => reference.is_here(),
+        }
+    }
+
+    /// This function will return an `Err(())` if one attempts to push another
+    /// path step when the last value is already `Here(Symbol)`.
+    fn push(&mut self, reference: Self::Reference) -> Result<(), ()> {
+        if self.is_final() {
+            self.steps_mut().push(reference);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    /// This function relies on `Self::push()` and `Self::append()` and
+    /// therefore will also return an `Err(())` if one attempts to map
+    /// a value after mapping the previous value to `Here(Symbol)`.
+    fn map_and_branch<F>(&self, mut f: F) -> Result<Self, ()>
+    where
+        F: FnMut(&Self::Reference) -> StopOrContinue<Self::Reference, Self>,
+    {
+        let mut output = Self::new([]);
+        for step in self.steps() {
+            match f(step) {
+                StopOrContinue::Stop(reference) => output.push(reference)?,
+                StopOrContinue::Continue(branch_path) => output.append(branch_path)?,
+            }
+        }
+
+        Ok(output)
+    }
+
+    fn pop(&mut self) -> Option<Self::Reference> {
+        self.steps_mut().pop()
+    }
+
+    fn pop_final(&mut self) -> Option<FeatureSymbol> {
+        if self.is_final() {
+            match self.pop() {
+                Some(reference) => match reference.get_here() {
+                    Some(symbol) => Some(symbol),
+                    None => panic!("you should never see this error because it is impossible"),
+                },
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    fn split_first(&self) -> Option<(Self::Reference, Self)> {
+        match self.steps().split_first() {
+            Some((first, rest)) => Some((*first, Self::new(rest))),
+            None => None,
+        }
+    }
+
+    fn into_iter(self) -> ReferencePathIterator<Self> {
+        ReferencePathIterator { remaining: self }
+    }
+}
+
+impl ReferencePath for ComplexReferencePath {
+    type Reference = ComplexReference;
+
+    fn new(steps: impl Into<Vec<ComplexReference>>) -> Self {
+        Self {
+            steps: steps.into(),
+        }
+    }
+
+    fn steps_mut(&mut self) -> &mut Vec<ComplexReference> {
+        &mut self.steps
+    }
+
+    fn steps(&self) -> &Vec<ComplexReference> {
+        &self.steps
+    }
+}
+
+impl ReferencePath for NormalReferencePath {
+    type Reference = NormalReference;
+
+    fn new(steps: impl Into<Vec<NormalReference>>) -> Self {
+        Self {
+            steps: steps.into(),
+        }
+    }
+
+    fn steps_mut(&mut self) -> &mut Vec<NormalReference> {
+        &mut self.steps
+    }
+
+    fn steps(&self) -> &Vec<NormalReference> {
+        &self.steps
+    }
+}
+
+pub struct ReferencePathIterator<Path: ReferencePath> {
+    remaining: Path,
+}
+
+impl<Path: ReferencePath> Iterator for ReferencePathIterator<Path> {
+    type Item = (Path::Reference, Option<Path::Reference>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (first, rest) = self.remaining.split_first()?;
+        match rest.split_first() {
+            Some((second, _)) => {
+                self.remaining = rest;
+                Some((first, Some(second)))
+            }
+            None => {
+                self.remaining = Path::new([]);
+                Some((first, None))
+            }
+        }
+    }
 }
 
 /*
@@ -54,51 +271,83 @@ pub enum Reference<Symbol: Clone> {
  * ==========
  */
 
-pub struct Sourced<'a, Root: DataSource, Symbol: Clone> {
+pub struct Sourced<'a, Root: DataSource> {
     pub root: &'a Root,
-    pub path: ReferencePath<Symbol>,
+    pub path: ComplexReferencePath,
 }
 
-pub enum StopOrContinue<T> {
-    Stop(T),
-    Continue(T),
+pub enum StopOrContinue<A, B> {
+    Stop(A),
+    Continue(B),
 }
 
-impl<T> StopOrContinue<T> {
-    pub const fn value(&self) -> &T {
+impl<A, B> StopOrContinue<A, B> {
+    pub const fn stop_value(&self) -> Option<&A> {
         match self {
-            StopOrContinue::Stop(v) | StopOrContinue::Continue(v) => v,
+            StopOrContinue::Stop(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub const fn continue_value(&self) -> Option<&B> {
+        match self {
+            StopOrContinue::Continue(v) => Some(v),
+            _ => None,
         }
     }
 }
 
-impl<Symbol: Clone> ReferencePath<Symbol> {}
-
-impl<'a, Root: DataSource, Symbol: Clone> Sourced<'a, Root, Symbol> {}
+impl<'a, Root: DataSource> Sourced<'a, Root> {}
 
 pub struct Defined<Source: DataSource, Object> {
     pub data_source: Source,
     pub instance: Object,
 }
 
-pub struct Referenced<Origin: ReferenceOrigin<Symbol>, Symbol: Clone> {
+pub struct Referenced<Origin: ReferenceOrigin, Symbol: Clone + Copy> {
     pub reference_point: Origin,
     pub instance: Symbol,
 }
 
-pub trait ReferenceOrigin<Symbol: Clone> {
+pub trait ReferenceOrigin {
     type Output;
-
-    fn resolve_absolute_reference(&self, reference_path: ReferencePath<Symbol>) -> Self::Output;
-}
-
-impl<Source: DataSource> ReferenceOrigin<PartSymbol> for Defined<Source, StructureSchema> {
-    type Output = PartSchema;
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: ReferencePath<PartSymbol>,
-    ) -> Self::Output {
+        reference_path: ComplexReferencePath,
+    ) -> Result<Self::Output, ResolutionError>;
+}
+
+impl<Source: DataSource> ReferenceOrigin for Defined<Source, StructureSchema> {
+    type Output = FeatureSchema;
+
+    fn resolve_absolute_reference(
+        &self,
+        reference_path: ComplexReferencePath,
+    ) -> Result<structure::FeatureSchema, ResolutionError> {
+        // for (this_reference, next_reference) in reference_path {
+        //     match first {
+        //         Reference::Parent => Err(ResolutionError::ImpossibleParent),
+        //         Reference::Sibling(part_symbol) => Err(ResolutionError::Placeholder("")),
+        //         Reference::Child(part_symbol) => Err(ResolutionError::Placeholder("")),
+        //         Reference::Substructure(_) => Err(ResolutionError::Placeholder("")),
+        //         Reference::Here(_) => Err(ResolutionError::Placeholder("")),
+        //     }
+        // }
+
+        // if let Some((first, rest)) = reference_path.first_rest() {
+        //     match first {
+        //         Reference::Parent => Err(ResolutionError::ImpossibleParent),
+        //         Reference::Sibling(part_symbol) => Err(ResolutionError::Placeholder("")),
+        //         Reference::Child(part_symbol) => Err(ResolutionError::Placeholder("")),
+        //         Reference::Substructure(_) => Err(ResolutionError::Placeholder("")),
+        //         Reference::Here(_) => Err(ResolutionError::Placeholder("")),
+        //     }
+        // } else {
+        //     Err(ResolutionError::EmptyPath)
+        // }
+        //
+
         todo!()
     }
 }
@@ -113,32 +362,18 @@ pub trait DataSource {
     fn get_structure(&self, structure: &StructureSymbol) -> Option<&Self::Structure>;
 }
 
-// impl<T: DataSource, Instance> DataSource for Defined<T, Instance> {
-//     type Feature = T::Feature;
-//     type Part = T::Part;
-//
-//     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
-//         todo!()
-//     }
-//
-//     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
-//         todo!()
-//     }
-// }
-
 impl DataSource for DataTable {
     type Feature = FeatureSchema;
     type Part = PartSchema;
     type Structure = StructureSchema;
 
     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
-        match self.get_schema(*feature).map(|schema| match schema {
-            Schema::Feature(schema) => Some(schema),
-            _ => None,
-        }) {
-            Some(opt) => opt,
-            None => None,
-        }
+        self.get_schema(*feature)
+            .map(|schema| match schema {
+                Schema::Feature(schema) => Some(schema),
+                _ => None,
+            })
+            .unwrap_or(None)
     }
 
     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
@@ -162,41 +397,6 @@ impl DataSource for DataTable {
     }
 }
 
-// impl DataSource for Defined<DataTable, StructureInstance> {
-//     type Feature = FeatureInstance;
-//     type Part = PartInstance;
-//
-//     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
-//         match self
-//             .data_source
-//             .get_structure(&self.instance.schema)?
-//             .get_feature(feature)?
-//         {
-//             Relation::MustSelfDefine => self.get_feature(feature),
-//             Relation::PrefersSelfDefined(reference) => {
-//                 if let Some(f) = self.get_feature(feature) {
-//                     Some(f)
-//                 } else {
-//                     // uhhhhhhhhhh uhhhhhh
-//                     None
-//                 }
-//             }
-//             Relation::MustInherit(reference) => {
-//                 // uhhhhhhhhhh uhhhhhh
-//                 None
-//             }
-//             Relation::PrefersInherited(reference) => {
-//                 // uhhhhhhhhhh uhhhhhh
-//                 None
-//             }
-//         }
-//     }
-//
-//     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {
-//         todo!()
-//     }
-// }
-
 pub struct ValidatedInstance<'a>(&'a StructureInstance);
 
 impl<'a> ValidatedInstance<'a> {
@@ -206,12 +406,11 @@ impl<'a> ValidatedInstance<'a> {
 }
 
 pub enum ResolutionError {
-    ImpossibleParent,
-    PartNotFound,
-    FeatureNotFound,
-    NoTableEntry,
-    IllegalStructureReference,
-    Placeholder,
+    EmptyPath,
+    ReferenceTooHigh,
+    NoTableEntry(Symbol),
+    NonPartSubstructureReference,
+    Placeholder(&'static str),
 }
 
 pub enum ValiditationError {

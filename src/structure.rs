@@ -121,13 +121,13 @@ pub struct PartSymbol(pub usize);
 
 #[derive(Clone, Debug)]
 pub struct StructureSchema {
-    pub features: HashMap<FeatureSymbol, Relation<FeatureSymbol>>,
+    pub features: HashMap<FeatureSymbol, Relation>,
     pub parts: HashSet<PartSymbol>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PartSchema {
-    pub features: HashMap<FeatureSymbol, Relation<FeatureSymbol>>,
+    pub features: HashMap<FeatureSymbol, Relation>,
     pub structure: StructureSymbol,
     pub presence: Presence,
 }
