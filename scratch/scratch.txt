@@ -1,0 +1,95 @@
+1.
+
+child G
+child A
+child C
+child B
+sibling D
+parent
+parent
+sibling Q
+parent
+sibling E
+child V
+
+|
+G     g->E
+|     ^  |
+A  a->Q  V
+|  ^
+C  c
+|  ^
+B->D
+
+|
+G->E
+   |
+   V
+
+|
+E
+|
+V
+
+child E
+child V
+
+noticed: sibling X, sibling Y = sibling Y
+noticed: child X, sibling Y = child Y
+
+2.
+
+child H
+sibling C
+child M
+parent
+sibling V
+child R
+child F
+sibling K
+parent
+sibling B
+child X
+parent
+sibling N
+
+|
+H->C  c->V
+   |  ^  |
+   M  M  R  r->B b->N
+         |  ^  | ^
+         F->K  X X
+
+|
+H->C->V
+      |
+      R->B->N
+
+|
+V
+|
+N
+
+child V
+child N
+
+3.
+
+parent
+sibling L
+child D
+child W
+sibling F
+parent
+parent
+child Q
+sibling A
+parent
+sibling Y
+child G
+parent
+sibling E
+
+^
+
+illegal
