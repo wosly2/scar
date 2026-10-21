@@ -161,22 +161,6 @@ pub struct StructureInstance {
     pub parts: HashMap<PartSymbol, PartInstance>,
 }
 
-// impl GetSymbol<FeatureSymbol> for StructureInstance {
-//     type Output = FeatureInstance;
-//
-//     fn get_symbol(&self, symbol: FeatureSymbol) -> Output {
-//         todo!()
-//     }
-// }
-//
-// impl GetSymbol<PartSymbol> for StructureInstance {
-//     type Output = PartInstance;
-//
-//     fn get_symbol(&self, symbol: PartSymbol) -> Output {
-//         todo!()
-//     }
-// }
-
 pub struct PartInstance {
     pub features: HashMap<FeatureSymbol, FeatureInstance>,
     pub structure: StructureInstance,

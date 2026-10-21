@@ -3,13 +3,6 @@ use crate::{
     StructureSchema, Symbol,
 };
 
-pub struct Sourced<'a, Root: DataSource> {
-    pub root: &'a Root,
-    pub path: DescentPath,
-}
-
-impl<'a, Root: DataSource> Sourced<'a, Root> {}
-
 pub struct Defined<'a, Source: DataSource, Object> {
     pub data_source: &'a Source,
     pub instance: &'a Object,
@@ -24,9 +17,15 @@ impl<'a, Source: DataSource, Object> Defined<'a, Source, Object> {
     }
 }
 
-pub struct Referenced<Origin: ReferenceOrigin, Symbol: Clone + Copy> {
-    pub reference_point: Origin,
-    pub instance: Symbol,
+pub struct Referenced<Origin: ReferenceOrigin> {
+    pub origin: Origin,
+    pub path: DescentPath,
+}
+
+impl<Origin: ReferenceOrigin> Referenced<Origin> {
+    pub fn resolve(&self) -> Result<Origin::Output, ResolutionError> {
+        self.origin.resolve_absolute_reference(&self.path)
+    }
 }
 
 pub trait ReferenceOrigin {
@@ -34,7 +33,7 @@ pub trait ReferenceOrigin {
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: DescentPath,
+        reference_path: &DescentPath,
     ) -> Result<Self::Output, ResolutionError>;
 }
 
@@ -43,7 +42,7 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, StructureSchema> {
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: DescentPath,
+        reference_path: &DescentPath,
     ) -> Result<&'a Relation, ResolutionError> {
         if let Some((reference, path)) = reference_path.first_rest() {
             match reference {
@@ -53,7 +52,7 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, StructureSchema> {
                             .get_part(&part_symbol)
                             .ok_or(ResolutionError::NoTableEntry(Symbol::Part(part_symbol)))?,
                     )
-                    .resolve_absolute_reference(path),
+                    .resolve_absolute_reference(&path),
                 Descent::HereInSubstructure(_) => Err(ResolutionError::NonPartHereInSubstructure),
                 Descent::Here(feature_symbol) => self.instance.features.get(&feature_symbol).ok_or(
                     ResolutionError::NoTableEntry(Symbol::Feature(feature_symbol)),
@@ -70,7 +69,7 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, PartSchema> {
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: DescentPath,
+        reference_path: &DescentPath,
     ) -> Result<&'a Relation, ResolutionError> {
         if let Some((reference, path)) = reference_path.first_rest() {
             match reference {
@@ -80,7 +79,7 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, PartSchema> {
                             .get_part(&part_symbol)
                             .ok_or(ResolutionError::NoTableEntry(Symbol::Part(part_symbol)))?,
                     )
-                    .resolve_absolute_reference(path),
+                    .resolve_absolute_reference(&path),
                 Descent::HereInSubstructure(feature_symbol) => {
                     // first get the internal structure schema
                     self.define(

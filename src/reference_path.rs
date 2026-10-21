@@ -1,4 +1,4 @@
-use crate::{Complex, Descent, FeatureSymbol, Reference};
+use crate::{Complex, Descent, Reference};
 
 #[derive(Clone, Debug)]
 pub struct ComplexPath {
@@ -48,26 +48,26 @@ impl ComplexPath {
     }
 
     pub fn is_descending_option(&self) -> Option<PathError> {
-        if let Some(first) = self.path_steps.first() {
-            match first {
-                Complex::Parent => Some(PathError::IllegalRootParent),
-                Complex::Sibling(_) => Some(PathError::IllegalRootParent),
-                _ => todo!(),
+        for step in &self.path_steps {
+            match step {
+                Complex::Parent => return Some(PathError::IllegalRootParent),
+                Complex::Sibling(_) => return Some(PathError::IllegalRootParent),
+                _ => (),
             }
-        } else {
-            None
         }
+
+        None
     }
 
     pub fn is_descending_bool(&self) -> bool {
-        if let Some(first) = self.path_steps.first() {
-            match first {
-                Complex::Parent | Complex::Sibling(_) => false,
-                _ => todo!(),
+        for step in &self.path_steps {
+            match step {
+                Complex::Parent | Complex::Sibling(_) => return false,
+                _ => (),
             }
-        } else {
-            true
         }
+
+        true
     }
 
     pub fn into_descent(&self) -> Result<DescentPath, PathError> {
@@ -96,7 +96,7 @@ pub struct DescentPath {
     path_steps: Vec<Descent>,
 }
 
-pub trait ReferencePath: Sized {
+pub trait ReferencePath: Sized + Clone {
     type Reference: Reference;
 
     fn new(path_steps: impl Into<Vec<Self::Reference>>) -> Self;
@@ -107,7 +107,7 @@ pub trait ReferencePath: Sized {
     /// return an `Err(())` if one attempts append while the last value is already
     /// `Here(Symbol)`.
     fn append(&mut self, mut path: Self) -> Result<(), ()> {
-        if self.is_final() {
+        if self.terminates_on_here() {
             Err(())
         } else {
             self.path_steps_mut().append(path.path_steps_mut());
@@ -115,7 +115,7 @@ pub trait ReferencePath: Sized {
         }
     }
 
-    fn is_final(&self) -> bool {
+    fn terminates_on_here(&self) -> bool {
         match self.path_steps().last() {
             None => false,
             Some(reference) => reference.is_here(),
@@ -125,7 +125,7 @@ pub trait ReferencePath: Sized {
     /// This function will return an `Err(())` if one attempts to push another
     /// path step when the last value is already a "Here" value.
     fn push(&mut self, reference: Self::Reference) -> Result<(), ()> {
-        if self.is_final() {
+        if self.terminates_on_here() {
             Err(())
         } else {
             self.path_steps_mut().push(reference);
@@ -134,32 +134,32 @@ pub trait ReferencePath: Sized {
     }
 
     /// This function relies on `Self::push()` and `Self::append()` and
-    /// therefore will also return an `Err(())` if one attempts to map
+    /// therefore will also return `None` if one attempts to map
     /// a value after mapping the previous value to a "Here" value.
-    fn map_and_branch<F>(&self, mut f: F) -> Result<Self, ()>
+    fn map_and_branch<F>(&self, mut f: F) -> Option<Self>
     where
         F: FnMut(&Self::Reference) -> StopOrContinue<Self::Reference, Self>,
     {
         let mut output = Self::new([]);
         for step in self.path_steps() {
             match f(step) {
-                StopOrContinue::Stop(reference) => output.push(reference)?,
-                StopOrContinue::Continue(branch_path) => output.append(branch_path)?,
+                StopOrContinue::Stop(reference) => output.push(reference).ok()?,
+                StopOrContinue::Continue(branch_path) => output.append(branch_path).ok()?,
             }
         }
 
-        Ok(output)
+        Some(output)
     }
 
     fn pop(&mut self) -> Option<Self::Reference> {
         self.path_steps_mut().pop()
     }
 
-    fn pop_final(&mut self) -> Option<FeatureSymbol> {
-        if self.is_final() {
+    fn pop_final(&mut self) -> Option<Self::Reference> {
+        if self.terminates_on_here() {
             match self.pop() {
                 Some(reference) => match reference.get_here() {
-                    Some(symbol) => Some(symbol),
+                    Some(_) => Some(reference),
                     None => panic!("you should never see this error because it is impossible"),
                 },
                 None => None,
@@ -176,8 +176,38 @@ pub trait ReferencePath: Sized {
         }
     }
 
-    fn into_iter(self) -> ReferencePathIterator<Self> {
-        ReferencePathIterator { remaining: self }
+    fn into_iter(&self) -> ReferencePathIterator<Self> {
+        ReferencePathIterator {
+            remaining: self.clone(),
+        }
+    }
+
+    fn replace_here(&self, path: Self) -> Option<Self> {
+        let mut new = self.clone();
+        match new.pop_final() {
+            Some(_) => {
+                new.append(path).ok()?;
+                Some(new)
+            }
+            None => None,
+        }
+    }
+
+    fn insert_before_here(&self, path: Self) -> Option<Self> {
+        if !path.terminates_on_here() {
+            let mut new = self.clone();
+            match new.pop_final() {
+                Some(here) => {
+                    new.append(path).ok()?;
+
+                    new.push(here).ok()?;
+                    Some(new)
+                }
+                None => None,
+            }
+        } else {
+            None
+        }
     }
 }
 
