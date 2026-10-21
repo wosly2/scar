@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::{any::TypeId, collections::HashMap, rc::Rc};
 
 mod data_source;
+mod macros;
 mod reference;
 mod reference_path;
 mod resolution;
@@ -15,12 +16,6 @@ pub use resolution::*;
 pub use structure::*;
 pub use validation::*;
 
-macro_rules! t {
-    [$a:expr] => {
-        $a.try_into().unwrap()
-    };
-}
-
 #[allow(unused)]
 fn main() {
     let mut table = DataTable::new();
@@ -30,22 +25,22 @@ fn main() {
     });
 
     let noun_phrase = table.define(StructureSchema {
-        features: HashMap::from([(t![number], Relation::MustSelfDefine)]),
+        features: HashMap::from([(iu![number], Relation::MustSelfDefine)]),
         parts: HashSet::new(),
     });
 
     let sentence_subject = table.define(PartSchema {
         features: HashMap::new(),
-        structure: noun_phrase.try_into().unwrap(),
+        structure: iu![noun_phrase],
         presence: Presence::Required,
     });
 
     let verb_phrase = table.define(StructureSchema {
         features: HashMap::from([(
-            number.try_into().unwrap(),
+            iu![number],
             Relation::MustInherit(ComplexPath::new([
-                Complex::Sibling(sentence_subject.try_into().unwrap()),
-                Complex::Here(number.try_into().unwrap()),
+                Complex::Sibling(iu![sentence_subject]),
+                Complex::Here(iu![number]),
             ])),
         )]),
         parts: HashSet::new(),
@@ -53,37 +48,37 @@ fn main() {
 
     let sentence_verb = table.define(PartSchema {
         features: HashMap::new(),
-        structure: verb_phrase.try_into().unwrap(),
+        structure: iu![verb_phrase],
         presence: Presence::Required,
     });
 
     let sentence_object = table.define(PartSchema {
         features: HashMap::new(),
-        structure: noun_phrase.try_into().unwrap(),
+        structure: iu![noun_phrase],
         presence: Presence::Optional,
     });
 
     let sentence = table.define(StructureSchema {
         features: HashMap::new(),
         parts: HashSet::from([
-            sentence_subject.try_into().unwrap(),
-            sentence_verb.try_into().unwrap(),
-            sentence_object.try_into().unwrap(),
+            iu![sentence_subject],
+            iu![sentence_verb],
+            iu![sentence_object],
         ]),
     });
 
     let mut example_sentence = StructureInstance {
-        schema: sentence.try_into().unwrap(),
+        schema: iu![sentence],
         features: HashMap::new(),
         parts: HashMap::from([
             (
-                sentence_subject.try_into().unwrap(),
+                iu![sentence_subject],
                 PartInstance {
                     features: HashMap::new(),
                     structure: StructureInstance {
-                        schema: noun_phrase.try_into().unwrap(),
+                        schema: iu![noun_phrase],
                         features: HashMap::from([FeatureInstance {
-                            schema: number.try_into().unwrap(),
+                            schema: iu![number],
                             value: FeatureValueInstance::Type(Rc::new(0 as usize)),
                         }
                         .key_pair()]),

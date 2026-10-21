@@ -1,4 +1,5 @@
 mod data_source;
+mod macros;
 mod reference;
 mod reference_path;
 mod resolution;
