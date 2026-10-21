@@ -1,42 +1,122 @@
-use crate::{ComplexReference, FeatureSymbol, NormalReference, Reference};
+use crate::{Complex, Descent, FeatureSymbol, Reference};
 
 #[derive(Clone, Debug)]
-pub struct ComplexReferencePath {
-    steps: Vec<ComplexReference>,
+pub struct ComplexPath {
+    path_steps: Vec<Complex>,
 }
 
-impl ComplexReferencePath {
-    pub fn normalize(&self) -> NormalReferencePath {
-        todo!()
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum PathError {
+    IllegalRootParent,
+    IllegalRootSibling,
+    ContinuesAfterHere,
+}
+
+impl ComplexPath {
+    pub fn normalize(&self) -> Result<ComplexPath, PathError> {
+        let mut stack = Vec::new();
+
+        for &path_step in &self.path_steps {
+            stack.push(path_step);
+
+            while stack.len() >= 2 {
+                let (a, b) = (stack[stack.len() - 2], stack[stack.len() - 1]);
+
+                let replacement = match (a, b) {
+                    (Complex::Sibling(_), Complex::Sibling(s)) => Some(Complex::Sibling(s)),
+                    (Complex::Child(_), Complex::Sibling(s)) => Some(Complex::Child(s)),
+                    (Complex::Child(_), Complex::Parent) => None,
+                    (Complex::Parent, Complex::Child(s)) => Some(Complex::Sibling(s)),
+                    (Complex::Sibling(_), Complex::Parent) => Some(Complex::Parent),
+                    (Complex::Here(_), _) | (Complex::HereInSubstructure(_), _) => {
+                        return Err(PathError::ContinuesAfterHere);
+                    }
+                    _ => break,
+                };
+
+                stack.pop();
+                stack.pop();
+
+                match replacement {
+                    Some(r) => stack.push(r),
+                    None => (),
+                };
+            }
+        }
+
+        Ok(ComplexPath { path_steps: stack })
+    }
+
+    pub fn is_descending_option(&self) -> Option<PathError> {
+        if let Some(first) = self.path_steps.first() {
+            match first {
+                Complex::Parent => Some(PathError::IllegalRootParent),
+                Complex::Sibling(_) => Some(PathError::IllegalRootParent),
+                _ => todo!(),
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn is_descending_bool(&self) -> bool {
+        if let Some(first) = self.path_steps.first() {
+            match first {
+                Complex::Parent | Complex::Sibling(_) => false,
+                _ => todo!(),
+            }
+        } else {
+            true
+        }
+    }
+
+    pub fn into_descent(&self) -> Result<DescentPath, PathError> {
+        let normalized = self.normalize()?;
+
+        match normalized.is_descending_option() {
+            Some(err) => Err(err),
+            None => Ok(DescentPath {
+                path_steps: normalized
+                    .path_steps
+                    .iter()
+                    .map(|&complex| match complex {
+                        Complex::Child(s) => Descent::Child(s),
+                        Complex::HereInSubstructure(s) => Descent::HereInSubstructure(s),
+                        Complex::Here(s) => Descent::Here(s),
+                        _ => panic!("this should be impossible @ ComplexPath::into_descent()"),
+                    })
+                    .collect(),
+            }),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct NormalReferencePath {
-    steps: Vec<NormalReference>,
+pub struct DescentPath {
+    path_steps: Vec<Descent>,
 }
 
 pub trait ReferencePath: Sized {
     type Reference: Reference;
 
-    fn new(steps: impl Into<Vec<Self::Reference>>) -> Self;
-    fn steps(&self) -> &Vec<Self::Reference>;
-    fn steps_mut(&mut self) -> &mut Vec<Self::Reference>;
+    fn new(path_steps: impl Into<Vec<Self::Reference>>) -> Self;
+    fn path_steps(&self) -> &Vec<Self::Reference>;
+    fn path_steps_mut(&mut self) -> &mut Vec<Self::Reference>;
 
     /// This function relies on `Self::push()` and therefore will also
     /// return an `Err(())` if one attempts append while the last value is already
     /// `Here(Symbol)`.
     fn append(&mut self, mut path: Self) -> Result<(), ()> {
         if self.is_final() {
-            self.steps_mut().append(path.steps_mut());
-            Ok(())
-        } else {
             Err(())
+        } else {
+            self.path_steps_mut().append(path.path_steps_mut());
+            Ok(())
         }
     }
 
     fn is_final(&self) -> bool {
-        match self.steps().last() {
+        match self.path_steps().last() {
             None => false,
             Some(reference) => reference.is_here(),
         }
@@ -46,10 +126,10 @@ pub trait ReferencePath: Sized {
     /// path step when the last value is already a "Here" value.
     fn push(&mut self, reference: Self::Reference) -> Result<(), ()> {
         if self.is_final() {
-            self.steps_mut().push(reference);
-            Ok(())
-        } else {
             Err(())
+        } else {
+            self.path_steps_mut().push(reference);
+            Ok(())
         }
     }
 
@@ -61,7 +141,7 @@ pub trait ReferencePath: Sized {
         F: FnMut(&Self::Reference) -> StopOrContinue<Self::Reference, Self>,
     {
         let mut output = Self::new([]);
-        for step in self.steps() {
+        for step in self.path_steps() {
             match f(step) {
                 StopOrContinue::Stop(reference) => output.push(reference)?,
                 StopOrContinue::Continue(branch_path) => output.append(branch_path)?,
@@ -72,7 +152,7 @@ pub trait ReferencePath: Sized {
     }
 
     fn pop(&mut self) -> Option<Self::Reference> {
-        self.steps_mut().pop()
+        self.path_steps_mut().pop()
     }
 
     fn pop_final(&mut self) -> Option<FeatureSymbol> {
@@ -90,7 +170,7 @@ pub trait ReferencePath: Sized {
     }
 
     fn first_rest(&self) -> Option<(Self::Reference, Self)> {
-        match self.steps().split_first() {
+        match self.path_steps().split_first() {
             Some((first, rest)) => Some((*first, Self::new(rest))),
             None => None,
         }
@@ -101,39 +181,39 @@ pub trait ReferencePath: Sized {
     }
 }
 
-impl ReferencePath for ComplexReferencePath {
-    type Reference = ComplexReference;
+impl ReferencePath for ComplexPath {
+    type Reference = Complex;
 
-    fn new(steps: impl Into<Vec<ComplexReference>>) -> Self {
+    fn new(path_steps: impl Into<Vec<Complex>>) -> Self {
         Self {
-            steps: steps.into(),
+            path_steps: path_steps.into(),
         }
     }
 
-    fn steps_mut(&mut self) -> &mut Vec<ComplexReference> {
-        &mut self.steps
+    fn path_steps_mut(&mut self) -> &mut Vec<Complex> {
+        &mut self.path_steps
     }
 
-    fn steps(&self) -> &Vec<ComplexReference> {
-        &self.steps
+    fn path_steps(&self) -> &Vec<Complex> {
+        &self.path_steps
     }
 }
 
-impl ReferencePath for NormalReferencePath {
-    type Reference = NormalReference;
+impl ReferencePath for DescentPath {
+    type Reference = Descent;
 
-    fn new(steps: impl Into<Vec<NormalReference>>) -> Self {
+    fn new(path_steps: impl Into<Vec<Descent>>) -> Self {
         Self {
-            steps: steps.into(),
+            path_steps: path_steps.into(),
         }
     }
 
-    fn steps_mut(&mut self) -> &mut Vec<NormalReference> {
-        &mut self.steps
+    fn path_steps_mut(&mut self) -> &mut Vec<Descent> {
+        &mut self.path_steps
     }
 
-    fn steps(&self) -> &Vec<NormalReference> {
-        &self.steps
+    fn path_steps(&self) -> &Vec<Descent> {
+        &self.path_steps
     }
 }
 

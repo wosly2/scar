@@ -1,3 +1,36 @@
+paths
+=====
+
+rule:
+    sibling X
+    sibling Y
+    =
+    sibling Y
+
+rule:
+    child X
+    sibling Y
+    =
+    child Y
+
+rule:
+    child X
+    parent
+    =
+    ~
+
+rule:
+    parent
+    child X
+    =
+    sibling X
+
+rule:
+    sibling X
+    parent
+    =
+    parent
+
 1.
 
 child G
@@ -33,9 +66,6 @@ V
 
 child E
 child V
-
-noticed: sibling X, sibling Y = sibling Y
-noticed: child X, sibling Y = child Y
 
 2.
 

@@ -19,12 +19,10 @@ impl DataSource for DataTable {
     type Structure = StructureSchema;
 
     fn get_feature(&self, feature: &FeatureSymbol) -> Option<&Self::Feature> {
-        self.get_schema(*feature)
-            .map(|schema| match schema {
-                Schema::Feature(schema) => Some(schema),
-                _ => None,
-            })
-            .unwrap_or(None)
+        match self.get_schema(*feature)? {
+            Schema::Feature(schema) => Some(schema),
+            _ => None,
+        }
     }
 
     fn get_part(&self, part: &PartSymbol) -> Option<&Self::Part> {

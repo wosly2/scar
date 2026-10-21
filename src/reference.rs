@@ -1,4 +1,4 @@
-use crate::{ComplexReferencePath, FeatureSymbol, PartSymbol};
+use crate::{ComplexPath, FeatureSymbol, PartSymbol};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Presence {
@@ -9,13 +9,13 @@ pub enum Presence {
 #[derive(Clone, Debug)]
 pub enum Relation {
     MustSelfDefine,
-    PrefersSelfDefined(ComplexReferencePath),
-    MustInherit(ComplexReferencePath),
-    PrefersInherited(ComplexReferencePath),
+    PrefersSelfDefined(ComplexPath),
+    MustInherit(ComplexPath),
+    PrefersInherited(ComplexPath),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ComplexReference {
+pub enum Complex {
     Parent,
     Sibling(PartSymbol),
     Child(PartSymbol),
@@ -30,7 +30,7 @@ pub enum ComplexReference {
     Here(FeatureSymbol),
 }
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum NormalReference {
+pub enum Descent {
     Child(PartSymbol),
     /// Behaves as a mirror of `Reference::HereInSubstructure`
     HereInSubstructure(FeatureSymbol),
@@ -41,41 +41,33 @@ pub trait Reference: PartialEq + Eq + Copy + Clone {
     fn is_here(&self) -> bool;
 }
 
-impl Reference for ComplexReference {
+impl Reference for Complex {
     fn get_here(&self) -> Option<FeatureSymbol> {
         match self {
-            ComplexReference::Parent
-            | ComplexReference::Sibling(_)
-            | ComplexReference::Child(_) => None,
-            ComplexReference::Here(symbol) | ComplexReference::HereInSubstructure(symbol) => {
-                Some(*symbol)
-            }
+            Complex::Parent | Complex::Sibling(_) | Complex::Child(_) => None,
+            Complex::Here(symbol) | Complex::HereInSubstructure(symbol) => Some(*symbol),
         }
     }
 
     fn is_here(&self) -> bool {
         match self {
-            ComplexReference::Parent
-            | ComplexReference::Sibling(_)
-            | ComplexReference::Child(_) => false,
-            ComplexReference::Here(_) | ComplexReference::HereInSubstructure(_) => true,
+            Complex::Parent | Complex::Sibling(_) | Complex::Child(_) => false,
+            Complex::Here(_) | Complex::HereInSubstructure(_) => true,
         }
     }
 }
-impl Reference for NormalReference {
+impl Reference for Descent {
     fn get_here(&self) -> Option<FeatureSymbol> {
         match self {
-            NormalReference::Child(_) => None,
-            NormalReference::Here(symbol) | NormalReference::HereInSubstructure(symbol) => {
-                Some(*symbol)
-            }
+            Descent::Child(_) => None,
+            Descent::Here(symbol) | Descent::HereInSubstructure(symbol) => Some(*symbol),
         }
     }
 
     fn is_here(&self) -> bool {
         match self {
-            NormalReference::Child(_) => false,
-            NormalReference::Here(_) | NormalReference::HereInSubstructure(_) => true,
+            Descent::Child(_) => false,
+            Descent::Here(_) | Descent::HereInSubstructure(_) => true,
         }
     }
 }

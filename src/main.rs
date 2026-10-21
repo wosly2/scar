@@ -15,6 +15,12 @@ pub use resolution::*;
 pub use structure::*;
 pub use validation::*;
 
+macro_rules! t {
+    [$a:expr] => {
+        $a.try_into().unwrap()
+    };
+}
+
 #[allow(unused)]
 fn main() {
     let mut table = DataTable::new();
@@ -24,7 +30,7 @@ fn main() {
     });
 
     let noun_phrase = table.define(StructureSchema {
-        features: HashMap::from([(number.try_into().unwrap(), Relation::MustSelfDefine)]),
+        features: HashMap::from([(t![number], Relation::MustSelfDefine)]),
         parts: HashSet::new(),
     });
 
@@ -37,9 +43,9 @@ fn main() {
     let verb_phrase = table.define(StructureSchema {
         features: HashMap::from([(
             number.try_into().unwrap(),
-            Relation::MustInherit(ComplexReferencePath::new([
-                ComplexReference::Sibling(sentence_subject.try_into().unwrap()),
-                ComplexReference::Here(number.try_into().unwrap()),
+            Relation::MustInherit(ComplexPath::new([
+                Complex::Sibling(sentence_subject.try_into().unwrap()),
+                Complex::Here(number.try_into().unwrap()),
             ])),
         )]),
         parts: HashSet::new(),

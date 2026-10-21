@@ -1,11 +1,11 @@
 use crate::{
-    ComplexReferencePath, DataSource, DataTable, NormalReference, NormalReferencePath, PartSchema,
-    ReferencePath, Relation, StructureSchema, Symbol,
+    DataSource, DataTable, Descent, DescentPath, PartSchema, ReferencePath, Relation,
+    StructureSchema, Symbol,
 };
 
 pub struct Sourced<'a, Root: DataSource> {
     pub root: &'a Root,
-    pub path: ComplexReferencePath,
+    pub path: DescentPath,
 }
 
 impl<'a, Root: DataSource> Sourced<'a, Root> {}
@@ -34,7 +34,7 @@ pub trait ReferenceOrigin {
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: NormalReferencePath,
+        reference_path: DescentPath,
     ) -> Result<Self::Output, ResolutionError>;
 }
 
@@ -43,25 +43,21 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, StructureSchema> {
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: NormalReferencePath,
+        reference_path: DescentPath,
     ) -> Result<&'a Relation, ResolutionError> {
         if let Some((reference, path)) = reference_path.first_rest() {
             match reference {
-                NormalReference::Child(part_symbol) => self
+                Descent::Child(part_symbol) => self
                     .define(
                         self.data_source
                             .get_part(&part_symbol)
                             .ok_or(ResolutionError::NoTableEntry(Symbol::Part(part_symbol)))?,
                     )
                     .resolve_absolute_reference(path),
-                NormalReference::HereInSubstructure(_) => {
-                    Err(ResolutionError::NonPartHereInSubstructure)
-                }
-                NormalReference::Here(feature_symbol) => {
-                    self.instance.features.get(&feature_symbol).ok_or(
-                        ResolutionError::NoTableEntry(Symbol::Feature(feature_symbol)),
-                    )
-                }
+                Descent::HereInSubstructure(_) => Err(ResolutionError::NonPartHereInSubstructure),
+                Descent::Here(feature_symbol) => self.instance.features.get(&feature_symbol).ok_or(
+                    ResolutionError::NoTableEntry(Symbol::Feature(feature_symbol)),
+                ),
             }
         } else {
             Err(ResolutionError::EarlyPathTermination)
@@ -74,18 +70,18 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, PartSchema> {
 
     fn resolve_absolute_reference(
         &self,
-        reference_path: NormalReferencePath,
+        reference_path: DescentPath,
     ) -> Result<&'a Relation, ResolutionError> {
         if let Some((reference, path)) = reference_path.first_rest() {
             match reference {
-                NormalReference::Child(part_symbol) => self
+                Descent::Child(part_symbol) => self
                     .define(
                         self.data_source
                             .get_part(&part_symbol)
                             .ok_or(ResolutionError::NoTableEntry(Symbol::Part(part_symbol)))?,
                     )
                     .resolve_absolute_reference(path),
-                NormalReference::HereInSubstructure(feature_symbol) => {
+                Descent::HereInSubstructure(feature_symbol) => {
                     // first get the internal structure schema
                     self.define(
                         self.data_source
@@ -102,7 +98,7 @@ impl<'a> ReferenceOrigin for Defined<'a, DataTable, PartSchema> {
                         feature_symbol,
                     )))
                 }
-                NormalReference::Here(feature_symbol) => {
+                Descent::Here(feature_symbol) => {
                     // just grab our own feature
                     self.instance.features.get(&feature_symbol).ok_or(
                         ResolutionError::NoTableEntry(Symbol::Feature(feature_symbol)),
